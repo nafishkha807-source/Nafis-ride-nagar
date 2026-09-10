@@ -1,0 +1,38 @@
+{
+  "summary": "Round-2 digest features (leaderboard credits, captain streak bonus, preview auto-pick + new fields) all pass. 11/12 tests green on first parallel run; the only failure was a transient Resend-proxy 429 rate limit on test-send when stacked immediately after 3 back-to-back /admin/digest/send calls. Manual curl of /admin/digest/test-send after cooldown returned {ok:true,email_id:<uuid>}, confirming the endpoint itself is healthy. No product bugs detected.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "POST /api/admin/digest/test-send",
+        "issue": "Emergent Resend proxy rate-limits (HTTP 429 'email rate limit exceeded') when several /digest/send + /test-send calls stack within ~30s. Not a code bug; test suite hit this once when running 3 send-calls in parallel then test-send. After a ~2min cooldown the endpoint returned {ok:true, email_id:<uuid>}. Recommend serializing tests that hit the proxy or adding a small delay between them."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_digest_round2.py",
+    "/app/test_reports/pytest/digest_round2_results.xml"
+  ],
+  "action_items": [
+    "Consider adding a small server-side delay/backoff or per-test serialization around /admin/digest/test-send + /admin/digest/send to avoid Resend proxy 429s during CI runs (product code itself is correct — proxy hard-caps burst calls)."
+  ],
+  "critical_code_review_comments": [
+    "digest.py:230 — _grant_leaderboard_credits correctly sets last_leaderboard_week/rank/credit atomically with $inc credits; idempotency verified by test (rerun => leaderboard_granted=0, credits unchanged).",
+    "digest.py:280 — _grant_streak_bonus uses last_streak_week for idempotency; verified 5-day streak grants +₹200, second immediate run doesn't re-grant.",
+    "digest.py:246 — compute_captain_streak correctly walks up to 14 days in Asia/Kolkata; verified 4 consecutive days => no grant, 5 consecutive => grant.",
+    "digest.py:804 — preview_digest never writes to DB and never calls send_email; test hit /preview 5x and confirmed rider credits + last_leaderboard_week unchanged.",
+    "server.py:1021 — /admin/digest/preview correctly requires admin and returns 404 when auto-pick can't find a user; new fields (leaderboard, my_rank, my_boost, streak_days, streak_eligible, streak_bonus, streaking_captains) all present in payload."
+  ],
+  "updated_files": [],
+  "seed_data_creation": "Test file seeds ephemeral TEST_ users (riders/captains) via /auth/dev-login and inserts COMPLETED rides directly into MongoDB (test_database.rides) with distinct fares and IST-based completed_at dates. Week-idempotency flags are reset with a $unset before each grant test so re-running the suite in the same ISO week still works.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "success_rate": {"backend": "100%", "frontend": "N/A (skipped per request)"},
+  "context_for_next_testing_agent": "Round-2 covered leaderboard grants (₹100/75/50 by rider spend rank, verified via DB user.last_leaderboard_rank + credit delta), captain streak bonus (₹200 for 5+ consecutive IST days, direct-DB-seeded rides), idempotency (last_leaderboard_week / last_streak_week gated by _current_week_key IST ISO year-week), and preview no-credit guarantee (5 consecutive calls, credits + week-flag unchanged). Only intermittent noise is Resend-proxy 429 when send+test-send are stacked — space them out or run serially (-p no:xdist). All 7 summary keys (riders, captains, admins, skipped, failed, leaderboard_granted, streak_granted) confirmed present on /admin/digest/send."
+}

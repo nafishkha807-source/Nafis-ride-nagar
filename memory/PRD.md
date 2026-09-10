@@ -107,15 +107,26 @@ Ride-sharing mobile app for Alwar city, Rajasthan (similar to Rapido). Single ap
 ## Digest Emails (Resend)
 - **Weekly digest** sent every Monday at 08:00 IST (Asia/Kolkata) via APScheduler cron.
 - Three templates:
-  - **Rider** — rides booked, spend, credit balance, completed/cancelled counts (last 7 days).
-  - **Captain** — earnings, rides done, week-average rating, lifetime rating (last 7 days).
-  - **Admin** — platform revenue, completed rides, cancellations, new users, top 5 captains.
+  - **Rider** — rides + spend + credits + leaderboard section (with your rank if top-3)
+  - **Captain** — earnings + rides + rating + streak bonus badge (if 5+ consecutive days)
+  - **Admin** — platform revenue + rides + top 5 captains + rider leaderboard + streaking captains
 - Emergent-managed Resend proxy (no user API key). Sender display name `Nafis Ride Alwar`.
 - Endpoints:
-  - `POST /api/admin/digest/send` — manual trigger, returns per-role counts.
-  - `POST /api/admin/digest/preview` — render a template without sending.
+  - `POST /api/admin/digest/send` — manual trigger; also grants leaderboard credits + streak bonuses.
+  - `POST /api/admin/digest/preview` — render a template without sending/granting. `email` optional (auto-picks eligible user). Returns `{subject, html, data, target_email}`.
   - `POST /api/admin/digest/test-send` — send a small test email to a supplied address.
   - `GET /api/admin/digest/runs` — recent run history from `digest_runs` collection.
-- Admin Overview tab has "Send weekly digest now" button + test-send form + recent runs list.
-- Only riders with ≥1 ride in the last 7 days receive a rider digest; only captains with ≥1 completed ride in the last 7 days receive a captain digest.
+- Admin dashboard: "Send weekly digest now" button, three preview buttons (Rider / Captain / Admin) that open a WebView modal with the actual HTML the recipient will see, test-send form, and recent runs list.
 - Guardrails from Resend playbook enforced on every send (`_assert_safe_email`).
+
+## Rider Weekly Leaderboard
+- Top 3 spenders (COMPLETED rides, last 7 days) win credit boosts: **₹100 / ₹75 / ₹50**.
+- Auto-granted when the weekly digest runs; idempotent per ISO week via `users.last_leaderboard_week`.
+- Shown at top of rider digest with rank banner ("You ranked #1 this week!") and the full leaderboard table highlighting the recipient's row. Also shown in the admin digest.
+- Rider digest summary contains `leaderboard`, `my_rank`, `my_boost` fields.
+
+## Captain Streak Bonus
+- Captains with **5+ consecutive active days** (at least one COMPLETED ride per IST day, ending today or yesterday) earn a **₹200 bonus**.
+- Auto-granted when the weekly digest runs; idempotent per ISO week via `users.last_streak_week`.
+- Captain digest shows either "🔥 STREAK BONUS UNLOCKED — X days straight, ₹200 credited" or a progress card "X day(s) — Y more for ₹200 bonus!".
+- Admin digest lists all currently-streaking captains.

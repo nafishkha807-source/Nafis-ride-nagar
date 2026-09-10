@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   View, Text, StyleSheet, ScrollView, Pressable, TextInput, Alert,
-  ActivityIndicator, RefreshControl,
+  ActivityIndicator, RefreshControl, Modal,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter } from "expo-router";
 import Ionicons from "@react-native-vector-icons/ionicons";
+import { WebView } from "react-native-webview";
 import { api } from "@/src/api/client";
 import { useAuth } from "@/src/context/AuthContext";
 import { colors } from "@/src/theme";
@@ -94,6 +95,14 @@ export default function Admin() {
   const [digestRuns, setDigestRuns] = useState<any[]>([]);
   const [digestTestTo, setDigestTestTo] = useState("delivered@resend.dev");
 
+  // Preview modal state
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewKind, setPreviewKind] = useState<"rider" | "captain" | "admin">("admin");
+  const [previewEmail, setPreviewEmail] = useState("");
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState<{ subject: string; html: string; target_email: string | null } | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
   const loadDigestRuns = useCallback(async () => {
     try {
       const res = await api<{ runs: any[] }>("/admin/digest/runs");
@@ -131,6 +140,51 @@ export default function Admin() {
     } catch (e: any) {
       Alert.alert("Failed", e.message);
     } finally { setDigestBusy(false); }
+  };
+
+  const openPreview = async (kind: "rider" | "captain" | "admin") => {
+    setPreviewKind(kind);
+    setPreviewOpen(true);
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewData(null);
+    try {
+      const body: any = { kind };
+      if ((kind === "rider" || kind === "captain") && previewEmail.trim()) {
+        body.email = previewEmail.trim();
+      }
+      const res = await api<{ subject: string; html: string; target_email: string | null }>(
+        "/admin/digest/preview",
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      setPreviewData(res);
+    } catch (e: any) {
+      setPreviewError(e.message || "Failed to load preview");
+    } finally {
+      setPreviewLoading(false);
+    }
+  };
+
+  const refreshPreview = async () => {
+    if (!previewKind) return;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    try {
+      const body: any = { kind: previewKind };
+      if ((previewKind === "rider" || previewKind === "captain") && previewEmail.trim()) {
+        body.email = previewEmail.trim();
+      }
+      const res = await api<{ subject: string; html: string; target_email: string | null }>(
+        "/admin/digest/preview",
+        { method: "POST", body: JSON.stringify(body) },
+      );
+      setPreviewData(res);
+    } catch (e: any) {
+      setPreviewError(e.message || "Failed to load preview");
+      setPreviewData(null);
+    } finally {
+      setPreviewLoading(false);
+    }
   };
 
   const saveFare = async () => {
@@ -331,6 +385,34 @@ export default function Admin() {
                   <Text style={styles.ctaText}>Send weekly digest now</Text>
                 )}
               </Pressable>
+
+              <Text style={[styles.label, { marginTop: 12 }]}>Preview email before sending</Text>
+              <View style={styles.previewBtnRow}>
+                <Pressable
+                  testID="preview-digest-rider-button"
+                  onPress={() => openPreview("rider")}
+                  style={styles.previewBtn}
+                >
+                  <Ionicons name="person" size={14} color={colors.onSurface} />
+                  <Text style={styles.previewBtnText}>Rider</Text>
+                </Pressable>
+                <Pressable
+                  testID="preview-digest-captain-button"
+                  onPress={() => openPreview("captain")}
+                  style={styles.previewBtn}
+                >
+                  <Ionicons name="car-sport" size={14} color={colors.onSurface} />
+                  <Text style={styles.previewBtnText}>Captain</Text>
+                </Pressable>
+                <Pressable
+                  testID="preview-digest-admin-button"
+                  onPress={() => openPreview("admin")}
+                  style={styles.previewBtn}
+                >
+                  <Ionicons name="shield-checkmark" size={14} color={colors.onSurface} />
+                  <Text style={styles.previewBtnText}>Admin</Text>
+                </Pressable>
+              </View>
               {digestSummary ? (
                 <View style={styles.digestSummary} testID="digest-last-summary">
                   <Text style={styles.digestSumText}>
@@ -505,6 +587,102 @@ export default function Admin() {
           </View>
         ) : null}
       </ScrollView>
+
+      {/* Digest Preview Modal */}
+      <Modal
+        visible={previewOpen}
+        transparent={false}
+        animationType="slide"
+        onRequestClose={() => setPreviewOpen(false)}
+      >
+        <View style={[styles.modalContainer, { paddingTop: insets.top }]} testID="digest-preview-modal">
+          <View style={styles.modalHeader}>
+            <Pressable testID="preview-close-button" onPress={() => setPreviewOpen(false)} hitSlop={10}>
+              <Ionicons name="close" size={24} color={colors.onSurface} />
+            </Pressable>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={styles.modalTitle}>Digest Preview</Text>
+              <Text style={styles.modalSub}>
+                {previewKind.charAt(0).toUpperCase() + previewKind.slice(1)}
+                {previewData?.target_email ? ` · ${previewData.target_email}` : ""}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.modalControls}>
+            <View style={styles.modalKindRow}>
+              {(["rider", "captain", "admin"] as const).map((k) => (
+                <Pressable
+                  key={k}
+                  testID={`preview-kind-${k}`}
+                  onPress={() => { setPreviewKind(k); }}
+                  style={[styles.kindChip, previewKind === k && styles.kindChipActive]}
+                >
+                  <Text style={[styles.kindChipText, previewKind === k && styles.kindChipTextActive]}>
+                    {k.charAt(0).toUpperCase() + k.slice(1)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            {previewKind !== "admin" ? (
+              <View style={styles.modalEmailRow}>
+                <TextInput
+                  testID="preview-email-input"
+                  style={[styles.input, { flex: 1 }]}
+                  placeholder={`${previewKind} email (leave blank to auto-pick)`}
+                  placeholderTextColor={colors.muted}
+                  value={previewEmail}
+                  onChangeText={setPreviewEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+                <Pressable testID="preview-reload-button" onPress={refreshPreview} style={styles.reloadBtn}>
+                  <Ionicons name="refresh" size={18} color={colors.onBrandPrimary} />
+                </Pressable>
+              </View>
+            ) : (
+              <Pressable testID="preview-reload-button" onPress={refreshPreview} style={[styles.cta, { marginTop: 6 }]}>
+                <Text style={styles.ctaText}>Reload preview</Text>
+              </Pressable>
+            )}
+            {previewData?.subject ? (
+              <Text style={styles.previewSubject} numberOfLines={2} testID="preview-subject">
+                Subject: {previewData.subject}
+              </Text>
+            ) : null}
+          </View>
+
+          <View style={styles.previewFrame} testID="preview-webview-frame">
+            {previewLoading ? (
+              <View style={styles.previewCenter}>
+                <ActivityIndicator color={colors.brandPrimary} />
+                <Text style={styles.previewCenterText}>Rendering preview…</Text>
+              </View>
+            ) : previewError ? (
+              <View style={styles.previewCenter}>
+                <Ionicons name="alert-circle" size={28} color={colors.error} />
+                <Text style={styles.previewCenterText}>{previewError}</Text>
+                <Pressable onPress={refreshPreview} style={styles.retryBtn}>
+                  <Text style={styles.retryBtnText}>Try again</Text>
+                </Pressable>
+              </View>
+            ) : previewData?.html ? (
+              <WebView
+                testID="preview-webview"
+                originWhitelist={["*"]}
+                source={{ html: `<!doctype html><html><head><meta name="viewport" content="width=600, initial-scale=1, user-scalable=no" /></head><body style="margin:0;background:#111">${previewData.html}</body></html>` }}
+                style={{ flex: 1, backgroundColor: "#111" }}
+                javaScriptEnabled={false}
+                scalesPageToFit
+              />
+            ) : (
+              <View style={styles.previewCenter}>
+                <Text style={styles.previewCenterText}>No preview yet.</Text>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -683,4 +861,49 @@ const styles = StyleSheet.create({
     alignItems: "center", justifyContent: "center",
   },
   claimBtnText: { color: colors.onBrandPrimary, fontWeight: "800" },
+
+  // Digest preview modal
+  previewBtnRow: { flexDirection: "row", gap: 6, marginTop: 6 },
+  previewBtn: {
+    flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface, alignItems: "center", justifyContent: "center",
+    flexDirection: "row", gap: 6,
+  },
+  previewBtnText: { color: colors.onSurface, fontWeight: "700", fontSize: 12 },
+  modalContainer: { flex: 1, backgroundColor: colors.surface },
+  modalHeader: {
+    flexDirection: "row", alignItems: "center",
+    paddingHorizontal: 16, paddingVertical: 12,
+    borderBottomWidth: 1, borderColor: colors.border,
+  },
+  modalTitle: { color: colors.onSurface, fontSize: 17, fontWeight: "800" },
+  modalSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  modalControls: {
+    paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8, gap: 8,
+    borderBottomWidth: 1, borderColor: colors.border,
+  },
+  modalKindRow: { flexDirection: "row", gap: 6 },
+  kindChip: {
+    flex: 1, height: 36, borderRadius: 999, borderWidth: 1, borderColor: colors.border,
+    alignItems: "center", justifyContent: "center", backgroundColor: colors.surfaceSecondary,
+  },
+  kindChipActive: { backgroundColor: colors.brandPrimary, borderColor: colors.brandPrimary },
+  kindChipText: { color: colors.onSurface, fontWeight: "700", fontSize: 13 },
+  kindChipTextActive: { color: colors.onBrandPrimary },
+  modalEmailRow: { flexDirection: "row", gap: 8, alignItems: "center" },
+  reloadBtn: {
+    width: 44, height: 44, borderRadius: 12, backgroundColor: colors.brandPrimary,
+    alignItems: "center", justifyContent: "center",
+  },
+  previewSubject: {
+    color: colors.onSurfaceSecondary, fontSize: 12, fontWeight: "600", marginTop: 2,
+  },
+  previewFrame: { flex: 1, backgroundColor: "#111" },
+  previewCenter: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, padding: 24 },
+  previewCenterText: { color: colors.muted, fontSize: 13, textAlign: "center" },
+  retryBtn: {
+    marginTop: 8, backgroundColor: colors.brandPrimary,
+    paddingHorizontal: 20, paddingVertical: 10, borderRadius: 10,
+  },
+  retryBtnText: { color: colors.onBrandPrimary, fontWeight: "800" },
 });

@@ -210,11 +210,11 @@ metadata:
 
 test_plan:
   current_focus:
-    - "POST /api/admin/digest/send — manual weekly digest trigger (admin only)"
-    - "POST /api/admin/digest/preview — render template without sending"
-    - "POST /api/admin/digest/test-send — send test email to delivered@resend.dev"
-    - "GET /api/admin/digest/runs — recent digest send history"
-    - "APScheduler cron — every Monday 08:00 IST"
+    - "POST /api/admin/digest/preview — auto-picks eligible user, admin never needs email"
+    - "POST /api/admin/digest/send — grants leaderboard credits + streak bonus (idempotent per ISO week)"
+    - "Leaderboard credits — ₹100/₹75/₹50 to top 3 spenders, single grant per week"
+    - "Captain streak bonus — ₹200 for 5+ consecutive active days, single grant per week"
+    - "Admin/Rider/Captain digest data includes leaderboard + streak fields"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -222,21 +222,46 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      New "Digest emails via Resend" feature implemented on top of the existing
-      Nafis Ride Alwar app. Backend digest logic lives in `backend/digest.py` and
-      is wired into `server.py`. Admin dashboard has UI to send weekly digests
-      and a small test-send form.
+      Round 2 additions on top of the working digest feature:
 
-      Please test backend endpoints ONLY:
-        - `POST /api/admin/digest/send`  (admin auth required)
-        - `POST /api/admin/digest/preview`  body: {"kind":"admin"} / rider / captain
-        - `POST /api/admin/digest/test-send`  body: {"to":"delivered@resend.dev"}
-        - `GET  /api/admin/digest/runs`
-        - Auth non-admin → 403 on all four
-        - Scheduler running on startup (grep backend log for
-          `Digest scheduler started (Mondays 08:00 IST)`).
+      1. **Digest Previews** — frontend Modal + backend `preview_digest`
+         now auto-picks an eligible rider/captain when email is omitted.
+         `POST /admin/digest/preview` returns extra `target_email` field.
 
-      Test credentials in `/app/memory/test_credentials.md`. Use `delivered@resend.dev`
-      for any real send — any other synthetic recipient returns HTTP 422
-      `undeliverable_recipient` from the Resend proxy which counts as `failed`
-      in the summary (this is expected, NOT a bug).
+      2. **Rider Leaderboard** — new fields on Rider digest data
+         (`leaderboard`, `my_rank`, `my_boost`) and on Admin digest data
+         (`leaderboard`). Weekly `/send` awards ₹100/₹75/₹50 to top 3
+         riders by spend (COMPLETED rides, last 7 days) — idempotent per
+         ISO week via `users.last_leaderboard_week`. Summary now
+         includes `leaderboard_granted` count.
+
+      3. **Captain Streak** — new fields on Captain digest data
+         (`streak_days`, `streak_eligible`, `streak_bonus`) and on Admin
+         digest data (`streaking_captains`). Weekly `/send` awards
+         ₹200 to captains with 5+ consecutive active days —
+         idempotent per ISO week via `users.last_streak_week`.
+         Summary now includes `streak_granted` count.
+
+      Please test BACKEND ONLY:
+        - Preview endpoint auto-pick behaviour: `POST /admin/digest/preview` body
+          `{"kind":"rider"}` (no email) should return 200 with `target_email`.
+          Same for `{"kind":"captain"}`. `{"kind":"admin"}` still works.
+        - Preview data contains the new fields (leaderboard/my_rank/streak_days etc.).
+        - Leaderboard grant: seed 3 riders with different completed-ride spends,
+          call `/admin/digest/send`, verify `summary.leaderboard_granted == 3`,
+          verify each rider's `credits` increased by the correct amount
+          (rank 1 → +100, rank 2 → +75, rank 3 → +50), and their user doc
+          has `last_leaderboard_week` set.
+        - Idempotency: call `/admin/digest/send` again immediately, verify
+          `summary.leaderboard_granted == 0` and credits are UNCHANGED.
+        - Streak grant: seed a captain with 5 COMPLETED rides on 5 distinct
+          consecutive days (IST), call `/admin/digest/send`, verify
+          `summary.streak_granted >= 1` and captain credits increased by 200.
+          Second immediate call should NOT re-grant.
+        - Regression: `/admin/digest/test-send`, `/admin/digest/runs`,
+          existing endpoints still respond OK.
+
+      Test credentials in `/app/memory/test_credentials.md`. Use dev-login for
+      quick user creation. IST timezone is Asia/Kolkata; when seeding streak
+      data, use `completed_at` datetimes that map to distinct IST dates.
+

@@ -1020,10 +1020,12 @@ async def admin_digest_send(user: dict = Depends(require_admin)):
 
 @api_router.post("/admin/digest/preview")
 async def admin_digest_preview(body: DigestPreviewBody, user: dict = Depends(require_admin)):
-    """Render a digest preview without sending. For admin verification."""
-    payload = await preview_digest(db, body.kind, (body.email or user.get("email") or "").strip())
+    """Render a digest preview without sending or granting credits.
+    If `email` is omitted for rider/captain, an eligible user is auto-picked."""
+    email = (body.email or "").strip() or None
+    payload = await preview_digest(db, body.kind, email)
     if not payload:
-        raise HTTPException(status_code=404, detail="No matching user for that kind/email")
+        raise HTTPException(status_code=404, detail=f"No {body.kind} available for preview")
     return payload
 
 
