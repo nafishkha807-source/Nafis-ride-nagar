@@ -224,7 +224,7 @@ export default function Admin() {
         <View style={styles.claimBox}>
           <Ionicons name="shield-checkmark" size={36} color={colors.brandPrimary} />
           <Text style={styles.claimTitle}>Enter Admin Code</Text>
-          <Text style={styles.claimSub}>Nafis Ride admins only. Default code: NAFIS-ADMIN</Text>
+          <Text style={styles.claimSub}>Nafis Ride admins only. Enter the code shared with you.</Text>
           <TextInput
             testID="admin-code-input"
             style={styles.input}

@@ -42,7 +42,7 @@ EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Nafis Ride Alwar")  # G1: o
 EMAIL_REPLY_TO = os.environ.get("EMAIL_REPLY_TO")
 
 APP_BRAND = "Nafis Ride Alwar"
-APP_URL = "https://rideshare-mvp-21.preview.emergentagent.com"
+APP_URL = os.environ.get("APP_URL", "").rstrip("/") or "https://nafisride.app"
 IST = zoneinfo.ZoneInfo("Asia/Kolkata")
 
 # Reward tuning
