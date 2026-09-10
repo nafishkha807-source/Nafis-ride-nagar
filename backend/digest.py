@@ -46,9 +46,10 @@ APP_URL = "https://rideshare-mvp-21.preview.emergentagent.com"
 IST = zoneinfo.ZoneInfo("Asia/Kolkata")
 
 # Reward tuning
-LEADERBOARD_CREDITS = [100.0, 75.0, 50.0]   # rank 1, 2, 3
+LEADERBOARD_CREDITS = [100.0, 75.0, 50.0]   # rank 1, 2, 3 (top spenders)
 STREAK_MIN_DAYS = 5
 STREAK_BONUS = 200.0
+REFERRAL_LEADERBOARD_CREDITS = [150.0, 100.0, 50.0]  # rank 1, 2, 3 (top inviters)
 
 
 # =============================================================================
@@ -241,6 +242,76 @@ async def _grant_leaderboard_credits(db, leaders: list[dict]) -> list[dict]:
 
 
 # =============================================================================
+# Referral leaderboard (top 3 inviters by new users referred, last 7 days)
+# =============================================================================
+async def compute_referral_leaderboard(db) -> list[dict]:
+    """Return top 3 riders by number of new users they referred in the last
+    7 days. Each entry: {rider_id, name, email, referrals}.
+    Filters by role='rider' BEFORE the top-3 slice so a non-rider inviter
+    can't push a legitimate rider off the board."""
+    start, end = _week_window()
+    # 1) get all rider user_ids up-front so the aggregate can filter to only them
+    rider_ids = await db.users.distinct("user_id", {"role": "rider"})
+    if not rider_ids:
+        return []
+    cur = db.users.aggregate([
+        {"$match": {
+            "referred_by": {"$in": rider_ids},
+            "created_at": {"$gte": start, "$lt": end},
+        }},
+        {"$group": {"_id": "$referred_by", "n": {"$sum": 1}}},
+        {"$sort": {"n": -1}},
+        {"$limit": 3},
+    ])
+    out: list[dict] = []
+    async for d in cur:
+        u = await db.users.find_one({"user_id": d["_id"]}, {"_id": 0}) or {}
+        out.append({
+            "rider_id": d["_id"],
+            "name": u.get("name") or (u.get("email") or "Rider").split("@")[0],
+            "email": u.get("email"),
+            "referrals": int(d.get("n", 0) or 0),
+        })
+    return out
+
+
+async def _count_weekly_referrals(db, rider_id: str) -> int:
+    start, end = _week_window()
+    return await db.users.count_documents({
+        "referred_by": rider_id,
+        "created_at": {"$gte": start, "$lt": end},
+    })
+
+
+async def _grant_referral_leaderboard_credits(db, leaders: list[dict]) -> list[dict]:
+    """Idempotent per ISO week via `last_referral_leaderboard_week` flag."""
+    week_key = _current_week_key()
+    granted: list[dict] = []
+    for i, ldr in enumerate(leaders[:3]):
+        credit = REFERRAL_LEADERBOARD_CREDITS[i] if i < len(REFERRAL_LEADERBOARD_CREDITS) else 0.0
+        if credit <= 0:
+            continue
+        u = await db.users.find_one({"user_id": ldr["rider_id"]}, {"_id": 0})
+        if not u:
+            continue
+        if u.get("last_referral_leaderboard_week") == week_key:
+            continue
+        await db.users.update_one(
+            {"user_id": ldr["rider_id"]},
+            {
+                "$inc": {"credits": credit},
+                "$set": {
+                    "last_referral_leaderboard_week": week_key,
+                    "last_referral_leaderboard_rank": i + 1,
+                    "last_referral_leaderboard_credit": credit,
+                },
+            },
+        )
+        granted.append({"rider_id": ldr["rider_id"], "rank": i + 1, "credit": credit})
+    return granted
+
+
+# =============================================================================
 # Captain streak (consecutive active days in the last 14 days) + bonus
 # =============================================================================
 async def compute_captain_streak(db, captain_id: str) -> int:
@@ -333,7 +404,8 @@ async def _sum_fare(db, match: dict) -> tuple[float, int]:
     return round(s, 2), c
 
 
-async def build_rider_digest(db, rider: dict, leaderboard: list[dict] | None = None) -> dict:
+async def build_rider_digest(db, rider: dict, leaderboard: list[dict] | None = None,
+                              referral_leaderboard: list[dict] | None = None) -> dict:
     start, end = _week_window()
     match = {"rider_id": rider["user_id"], "created_at": {"$gte": start, "$lt": end}}
     total = await db.rides.count_documents(match)
@@ -346,6 +418,11 @@ async def build_rider_digest(db, rider: dict, leaderboard: list[dict] | None = N
     my_rank = next((i + 1 for i, r in enumerate(lb) if r["rider_id"] == rider["user_id"]), None)
     my_boost = LEADERBOARD_CREDITS[my_rank - 1] if my_rank and my_rank <= 3 else 0.0
 
+    rlb = referral_leaderboard if referral_leaderboard is not None else await compute_referral_leaderboard(db)
+    my_ref_rank = next((i + 1 for i, r in enumerate(rlb) if r["rider_id"] == rider["user_id"]), None)
+    my_ref_boost = REFERRAL_LEADERBOARD_CREDITS[my_ref_rank - 1] if my_ref_rank and my_ref_rank <= 3 else 0.0
+    weekly_referrals = await _count_weekly_referrals(db, rider["user_id"])
+
     return {
         "rides": total,
         "completed": completed,
@@ -355,6 +432,10 @@ async def build_rider_digest(db, rider: dict, leaderboard: list[dict] | None = N
         "leaderboard": lb,
         "my_rank": my_rank,
         "my_boost": my_boost,
+        "referral_leaderboard": rlb,
+        "my_referral_rank": my_ref_rank,
+        "my_referral_boost": my_ref_boost,
+        "weekly_referrals": weekly_referrals,
     }
 
 
@@ -422,6 +503,7 @@ async def build_admin_digest(db) -> dict:
         })
     leaderboard = await compute_rider_leaderboard(db)
     streakers = await compute_streaking_captains(db)
+    referral_leaderboard = await compute_referral_leaderboard(db)
     return {
         "revenue": rev,
         "rides": rides,
@@ -431,6 +513,7 @@ async def build_admin_digest(db) -> dict:
         "top_captains": top_captains,
         "leaderboard": leaderboard,
         "streaking_captains": streakers,
+        "referral_leaderboard": referral_leaderboard,
     }
 
 
@@ -484,6 +567,28 @@ def _leaderboard_table(leaders: list[dict], highlight_rider_id: str | None = Non
     return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:8px">{rows}</table>'
 
 
+def _referral_leaderboard_table(leaders: list[dict], highlight_rider_id: str | None = None) -> str:
+    if not leaders:
+        return ('<table role="presentation" width="100%" style="background:#1a1a1a;border-radius:8px">'
+                '<tr><td style="padding:12px;color:#888;text-align:center">No new referrals this week — invite a friend to be on next week&#39;s board!</td></tr></table>')
+    rows = ""
+    for i, r in enumerate(leaders, 1):
+        boost = REFERRAL_LEADERBOARD_CREDITS[i - 1] if i - 1 < len(REFERRAL_LEADERBOARD_CREDITS) else 0
+        medal = _MEDAL.get(i, "")
+        is_me = highlight_rider_id and r["rider_id"] == highlight_rider_id
+        row_bg = "#14252a" if is_me else "transparent"
+        name_color = "#5EC6FF" if is_me else "#eaeaea"
+        rows += (
+            f'<tr style="background:{row_bg}">'
+            f'<td style="padding:10px;border-bottom:1px solid #333;color:{name_color};font-weight:700">'
+            f'{medal} {escape(r["name"])}{" (you)" if is_me else ""}</td>'
+            f'<td style="padding:10px;border-bottom:1px solid #333;color:#5EC6FF;text-align:right">{r["referrals"]} invited</td>'
+            f'<td style="padding:10px;border-bottom:1px solid #333;color:#8ee0a1;text-align:right">+&#8377;{int(boost)}</td>'
+            f'</tr>'
+        )
+    return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:8px">{rows}</table>'
+
+
 def _rider_html(name: str, d: dict, rider_id: str | None = None) -> str:
     stat_grid = (
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:12px 0 8px">'
@@ -514,6 +619,28 @@ def _rider_html(name: str, d: dict, rider_id: str | None = None) -> str:
             f'</div>'
         )
 
+    ref_banner = ""
+    if d.get("my_referral_rank"):
+        medal = _MEDAL.get(d["my_referral_rank"], "")
+        ref_banner = (
+            f'<div style="margin:12px 0 8px;padding:16px;border-radius:12px;'
+            f'background:linear-gradient(135deg,#5EC6FF 0%,#2e7dd6 100%);color:#0b1a29">'
+            f'<div style="font-size:12px;font-weight:800;letter-spacing:1px">TOP INVITER {medal}</div>'
+            f'<div style="font-size:20px;font-weight:900;margin-top:4px">'
+            f'You invited {d["weekly_referrals"]} friend{"s" if d["weekly_referrals"] != 1 else ""} — #{d["my_referral_rank"]} this week!</div>'
+            f'<div style="font-size:13px;margin-top:4px">&#8377;{int(d["my_referral_boost"])} bonus credit has been added to your wallet.</div>'
+            f'</div>'
+        )
+    elif d.get("weekly_referrals"):
+        ref_banner = (
+            f'<div style="margin:12px 0 8px;padding:14px;border-radius:12px;'
+            f'background:#242424;border:1px dashed #5EC6FF;color:#eaeaea">'
+            f'<div style="font-size:12px;font-weight:800;letter-spacing:1px;color:#5EC6FF">YOUR INVITES</div>'
+            f'<div style="font-size:15px;font-weight:700;margin-top:4px">'
+            f'You invited {d["weekly_referrals"]} friend{"s" if d["weekly_referrals"] != 1 else ""} this week — top 3 win up to &#8377;{int(REFERRAL_LEADERBOARD_CREDITS[0])}!</div>'
+            f'</div>'
+        )
+
     body = (
         f'<h1 style="color:#FFCC00;font-size:24px;margin:12px 0 4px">Your week in Alwar</h1>'
         f'<p style="color:#bfbfbf;margin:0 0 20px">Hi {escape(name)}, here is your last 7 days on {escape(APP_BRAND)}.</p>'
@@ -521,9 +648,13 @@ def _rider_html(name: str, d: dict, rider_id: str | None = None) -> str:
         f'<p style="color:#cfcfcf;margin:16px 0 0">Completed: <b>{d["completed"]}</b> · '
         f'Cancelled: <b>{d["cancelled"]}</b></p>'
         f'{rank_banner}'
+        f'{ref_banner}'
         '<h3 style="color:#eaeaea;margin:24px 0 8px">This week\'s top spenders 🏆</h3>'
         f'{_leaderboard_table(d.get("leaderboard") or [], highlight_rider_id=rider_id)}'
         f'<p style="color:#9a9a9a;font-size:12px;margin:10px 0 0">Top 3 each week earn &#8377;100 / &#8377;75 / &#8377;50 credit — auto-added to your wallet.</p>'
+        '<h3 style="color:#eaeaea;margin:24px 0 8px">This week\'s top inviters 🎁</h3>'
+        f'{_referral_leaderboard_table(d.get("referral_leaderboard") or [], highlight_rider_id=rider_id)}'
+        f'<p style="color:#9a9a9a;font-size:12px;margin:10px 0 0">Top 3 referrers each week earn &#8377;150 / &#8377;100 / &#8377;50 credit. Share your code from Profile → Rewards.</p>'
         f'<p style="margin:24px 0 4px"><a href="{APP_URL}" style="background:#FFCC00;color:#111;padding:12px 20px;'
         f'border-radius:24px;text-decoration:none;font-weight:700;display:inline-block">Book your next ride</a></p>'
     )
@@ -631,8 +762,10 @@ def _admin_html(d: dict) -> str:
         f'New captains: <b>{d["new_captains"]}</b></p>'
         '<h3 style="color:#eaeaea;margin:24px 0 8px">Top captains</h3>'
         f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#1a1a1a;border-radius:8px">{cap_rows}</table>'
-        '<h3 style="color:#eaeaea;margin:24px 0 8px">Rider leaderboard 🏆</h3>'
+        '<h3 style="color:#eaeaea;margin:24px 0 8px">Rider spend leaderboard 🏆</h3>'
         f'{_leaderboard_table(d.get("leaderboard") or [])}'
+        '<h3 style="color:#eaeaea;margin:24px 0 8px">Rider referral leaderboard 🎁</h3>'
+        f'{_referral_leaderboard_table(d.get("referral_leaderboard") or [])}'
         f'{streak_section}'
     )
     return _shell(body)
@@ -647,12 +780,17 @@ async def send_weekly_digests(db) -> dict:
     Returns a summary dict of counts."""
     start, end = _week_window()
     sent = {"riders": 0, "captains": 0, "admins": 0, "skipped": 0, "failed": 0,
-            "leaderboard_granted": 0, "streak_granted": 0}
+            "leaderboard_granted": 0, "streak_granted": 0,
+            "referral_leaderboard_granted": 0}
 
     # 1) Compute + grant rewards FIRST so digests reflect the just-credited bonuses.
     leaderboard = await compute_rider_leaderboard(db)
     lb_grants = await _grant_leaderboard_credits(db, leaderboard)
     sent["leaderboard_granted"] = len(lb_grants)
+
+    referral_leaderboard = await compute_referral_leaderboard(db)
+    ref_grants = await _grant_referral_leaderboard_credits(db, referral_leaderboard)
+    sent["referral_leaderboard_granted"] = len(ref_grants)
 
     # Riders: only those with at least 1 ride last week
     rider_ids = await db.rides.distinct(
@@ -660,15 +798,27 @@ async def send_weekly_digests(db) -> dict:
     riders = await db.users.find(
         {"user_id": {"$in": rider_ids}, "role": "rider"}, {"_id": 0}
     ).to_list(1000) if rider_ids else []
+    # Also include riders on either leaderboard even if they didn't ride this week
+    board_ids = {r["rider_id"] for r in leaderboard} | {r["rider_id"] for r in referral_leaderboard}
+    board_ids -= {u["user_id"] for u in riders}
+    if board_ids:
+        extras = await db.users.find(
+            {"user_id": {"$in": list(board_ids)}, "role": "rider"}, {"_id": 0}
+        ).to_list(1000)
+        riders.extend(extras)
     for u in riders:
         if not u.get("email") or "@" not in u["email"]:
             sent["skipped"] += 1; continue
         try:
-            data = await build_rider_digest(db, u, leaderboard=leaderboard)
-            html = _rider_html(u.get("name") or u["email"].split("@")[0], data,
-                                rider_id=u["user_id"])
+            # Re-fetch after possible credit grant so email shows fresh credit balance.
+            u_fresh = await db.users.find_one({"user_id": u["user_id"]}, {"_id": 0}) or u
+            data = await build_rider_digest(db, u_fresh,
+                                             leaderboard=leaderboard,
+                                             referral_leaderboard=referral_leaderboard)
+            html = _rider_html(u_fresh.get("name") or u_fresh["email"].split("@")[0], data,
+                                rider_id=u_fresh["user_id"])
             res = await send_email(
-                to=u["email"],
+                to=u_fresh["email"],
                 subject=f"Your {APP_BRAND} week: {data['rides']} rides, ₹{int(data['spend'])} spent",
                 html=html,
             )

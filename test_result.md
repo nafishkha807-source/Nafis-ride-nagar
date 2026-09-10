@@ -210,11 +210,11 @@ metadata:
 
 test_plan:
   current_focus:
-    - "POST /api/admin/digest/preview — auto-picks eligible user, admin never needs email"
-    - "POST /api/admin/digest/send — grants leaderboard credits + streak bonus (idempotent per ISO week)"
-    - "Leaderboard credits — ₹100/₹75/₹50 to top 3 spenders, single grant per week"
-    - "Captain streak bonus — ₹200 for 5+ consecutive active days, single grant per week"
-    - "Admin/Rider/Captain digest data includes leaderboard + streak fields"
+    - "Referral leaderboard grant — top 3 referrers get ₹150/₹100/₹50 (idempotent per ISO week)"
+    - "compute_referral_leaderboard — top 3 riders by count of new referred users last 7 days"
+    - "Rider digest data — weekly_referrals, my_referral_rank, my_referral_boost, referral_leaderboard fields"
+    - "Admin digest data — referral_leaderboard field present"
+    - "Idempotency — second send does not re-grant referral credits"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -222,7 +222,61 @@ test_plan:
 agent_communication:
   - agent: "main"
     message: |
-      Round 2 additions on top of the working digest feature:
+      Round 3 additions on top of digest feature — Rider Referral Leaderboard.
+
+      Reward: top 3 rider inviters each week get ₹150 / ₹100 / ₹50
+      (`REFERRAL_LEADERBOARD_CREDITS`). Idempotent per ISO week via
+      `users.last_referral_leaderboard_week`. Summary now includes
+      `referral_leaderboard_granted` count.
+
+      Referral counting: for each rider we count how many `users` documents
+      exist with `referred_by == that_rider.user_id` AND
+      `created_at` in the last 7 days. Only riders are eligible
+      (leaderboard computation filters `role == "rider"`).
+
+      New fields:
+        - Rider digest data: `weekly_referrals`, `my_referral_rank`,
+          `my_referral_boost`, `referral_leaderboard`.
+        - Admin digest data: `referral_leaderboard`.
+
+      Manual verification already done (curl):
+        - Seeded referrer1 + 3 invitees applying its code.
+        - First /send granted `referral_leaderboard_granted == 1`
+          and referrer1.credits went from 0 → 150.
+        - Second /send granted 0 (idempotent).
+        - Rider preview for referrer1 shows my_referral_rank=1,
+          my_referral_boost=150, weekly_referrals=3, HTML contains
+          "top inviters" section and "3 friends" copy.
+
+      Please test BACKEND ONLY. Focus:
+        - Seed 3 rider referrers with different invite counts (rider1 = 3
+          invitees, rider2 = 2 invitees, rider3 = 1 invitee). Each invitee
+          must use `POST /api/referral/apply` so `referred_by` gets set.
+        - Call POST /api/admin/digest/send. Assert
+          summary.referral_leaderboard_granted == 3. Verify:
+            rider1.credits += 150, has last_referral_leaderboard_rank=1
+            rider2.credits += 100, rank=2
+            rider3.credits += 50,  rank=3
+          Each has last_referral_leaderboard_week set to current IST week.
+        - Immediate re-call: referral_leaderboard_granted == 0, credits
+          unchanged.
+        - Rider with 0 referrals doesn't appear on the board.
+        - A CAPTAIN who somehow refers users is NOT on the rider referral
+          board (leaderboard filters role="rider").
+        - Preview: `POST /admin/digest/preview` for rider returns
+          `data.weekly_referrals`, `data.my_referral_rank`,
+          `data.my_referral_boost`, `data.referral_leaderboard`.
+          For admin returns `data.referral_leaderboard`.
+        - Regression: existing send summary keys (7 total previous +
+          referral_leaderboard_granted = 8 keys); leaderboard_granted /
+          streak_granted still work; test-send with delivered@resend.dev
+          still 200; digest_runs still populated.
+
+      IMPORTANT: Resend proxy blocks synthetic domains (422 → summary.failed).
+      That is expected. Avoid rate-limits — do NOT rapid-fire /test-send.
+      Idempotency uses IST week; if tests need to re-simulate a fresh week,
+      reset `last_referral_leaderboard_week` on the user doc before re-calling.
+
 
       1. **Digest Previews** — frontend Modal + backend `preview_digest`
          now auto-picks an eligible rider/captain when email is omitted.

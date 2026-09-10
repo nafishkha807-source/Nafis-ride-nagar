@@ -125,6 +125,13 @@ Ride-sharing mobile app for Alwar city, Rajasthan (similar to Rapido). Single ap
 - Shown at top of rider digest with rank banner ("You ranked #1 this week!") and the full leaderboard table highlighting the recipient's row. Also shown in the admin digest.
 - Rider digest summary contains `leaderboard`, `my_rank`, `my_boost` fields.
 
+## Rider Referral Leaderboard
+- Top 3 rider inviters (by number of new users referred in the last 7 days) win credit boosts: **₹150 / ₹100 / ₹50**.
+- Referrals counted from `users.referred_by` where the referred user's `created_at` falls in the current 7-day window. Only rider referrers are eligible (filter applied in the aggregation pipeline before the top-3 slice).
+- Auto-granted when the weekly digest runs; idempotent per ISO week via `users.last_referral_leaderboard_week`.
+- Rider digest shows a rank banner for top-3 ("You invited 3 friends — #1 this week!"), a "Your invites" progress card for anyone with 1+ referral, and the full referral board table with the recipient's row highlighted. Admin digest lists the full board too.
+- Rider digest data adds `referral_leaderboard`, `my_referral_rank`, `my_referral_boost`, `weekly_referrals`. Admin digest data adds `referral_leaderboard`.
+
 ## Captain Streak Bonus
 - Captains with **5+ consecutive active days** (at least one COMPLETED ride per IST day, ending today or yesterday) earn a **₹200 bonus**.
 - Auto-granted when the weekly digest runs; idempotent per ISO week via `users.last_streak_week`.
