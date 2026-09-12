@@ -1,7 +1,7 @@
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-const BASE_URL = process.env.EXPO_PUBLIC_BACKEND_URL as string;
+const BASE_URL = "https://onrender.com";  
 
 const TOKEN_KEY = "nafis_session_token";
 let memoryToken: string | null = null;
