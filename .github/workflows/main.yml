@@ -1,0 +1,29 @@
+name: Build Android APK
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-size: 18
+
+      - name: Install Expo CLI and EAS CLI
+        run: npm install -g expo-cli eas-cli
+
+      - name: Install Dependencies
+        run: |
+          cd frontend
+          npm install
+
+      - name: Build Android App Offline
+        run: |
+          cd frontend
+          npx expo export --platform android
+          
