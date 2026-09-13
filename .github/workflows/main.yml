@@ -22,7 +22,7 @@ jobs:
           cd frontend
           npm install
 
-                      - name: Build Android APK
+      - name: Build Android APK
         run: |
           cd frontend
           npx expo prebuild --platform android
