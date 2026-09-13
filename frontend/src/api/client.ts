@@ -1,7 +1,8 @@
 import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 
-const BASE_URL = "https://onrender.com";  
+const BASE_URL = "https://nafis-ride-nagar-1.onrender.com";
+
 
 const TOKEN_KEY = "nafis_session_token";
 let memoryToken: string | null = null;
