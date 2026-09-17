@@ -1,49 +1,33 @@
 {
   "expo": {
-    "name": "Nafis Ride Alwar",
-    "slug": "nafis-ride-alwar",
+    "name": "Alwar Rides",
+    "slug": "alwar-rides",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "nafisride",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/images/splash-image.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.emergent.ridesharingalwar.r3i3u2"
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#FFCC00"
+        "backgroundColor": "#ffffff"
       },
-      "package": "com.emergent.ridesharingalwar.r3i3u2"
+      "package": "com.nafiskhan.alwarrides"
     },
     "web": {
-      "bundler": "metro",
-      "output": "single",
       "favicon": "./assets/images/favicon.png"
     },
-    "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/images/adaptive-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#FFCC00"
-        }
-      ],
-      "expo-font",
-      "expo-image",
-      "expo-secure-store",
-      "expo-web-browser",
-      "expo-status-bar",
-      "expo-audio",
-      "@react-native-vector-icons/ionicons"
-    ],
-    "experiments": {
-      "typedRoutes": true
+    "extra": {
+      "eas": {
+        "projectId": "c12d4341-c7b3-446b-a39c-76f631d27721"
+      }
     }
   }
 }
